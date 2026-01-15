@@ -1,4 +1,4 @@
-#Import requirements
+# Real-Time Stock Data Producer
 import os
 import time
 import json
@@ -6,43 +6,49 @@ import requests
 from kafka import KafkaProducer
 from dotenv import load_dotenv
 
-#Load environment variables
+# Initialize environment
 load_dotenv()
 
+# Configuration Constants
+FINNHUB_API_KEY = os.getenv("API_KEY_HONNUB")
+KAFKA_TOPIC_NAME = os.getenv("KAFKA_TOPIC", "stock-quotes")
+KAFKA_SERVER = os.getenv("KAFKA_BOOTSTRAP_SERVERS")
+FINNHUB_ENDPOINT = "https://finnhub.io/api/v1/quote"
+TARGET_SYMBOLS = ["AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"]
 
-#Define variables for API
-API_KEY=os.getenv("API_KEY_HONNUB")
-KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "stock-quotes")
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS")
-
-BASE_URL = "https://finnhub.io/api/v1/quote"
-SYMBOLS = ["AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"]
-
-#Initial Producer
-producer = KafkaProducer (
-    bootstrap_servers=[KAFKA_BOOTSTRAP_SERVERS],
-    value_serializer=lambda v: json.dumps(v).encode("utf-8")
+# Initialize Kafka Producer
+stream_producer = KafkaProducer(
+    bootstrap_servers=[KAFKA_SERVER],
+    value_serializer=lambda message: json.dumps(message).encode("utf-8")
 )
 
-#Retrive Data
-def fetch_quote(symbol):
-    url = f"{BASE_URL}?symbol={symbol}&token={API_KEY}"
+def retrieve_stock_data(ticker_symbol):
+    """
+    Fetches the latest quote for a given stock symbol from Finnhub.
+    """
+    request_url = f"{FINNHUB_ENDPOINT}?symbol={ticker_symbol}&token={FINNHUB_API_KEY}"
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        data["symbol"] = symbol
-        data["fetched_at"] = int (time.time())
-        return data
-    except Exception as e:
-        print(f"Error fetching {symbol}: {e}")
+        api_response = requests.get(request_url)
+        api_response.raise_for_status()
+        
+        stock_data = api_response.json()
+        stock_data["symbol"] = ticker_symbol
+        stock_data["ingested_at"] = int(time.time())
+        
+        return stock_data
+    except Exception as error:
+        print(f"[ERROR] Failed to fetch data for {ticker_symbol}: {error}")
         return None
 
-#Looping and Pushing to Stream
-while True:
-    for symbol in SYMBOLS:
-        quote = fetch_quote(symbol)
-        if quote:
-            print(f"Producing: {quote}")
-            producer.send(KAFKA_TOPIC, value=quote)
-    time.sleep(6)
+if __name__ == "__main__":
+    print(f"Starting producer for symbols: {TARGET_SYMBOLS}")
+    while True:
+        for ticker in TARGET_SYMBOLS:
+            market_data = retrieve_stock_data(ticker)
+            if market_data:
+                print(f"Streaming update: {market_data}")
+                stream_producer.send(KAFKA_TOPIC_NAME, value=market_data)
+        
+        # Rate limit to avoid API throttling
+        time.sleep(6)
+
